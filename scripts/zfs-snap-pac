@@ -1,41 +1,45 @@
 #!/bin/bash
 # zfs-snap-pac
 
-
-# Command to get / dataset: zpool get bootfs -o value -pH
-
 set -e
-
+##############################
+#   Variables
+##############################
 bootfs="none"
-snapshotName="zfs-snap-pac-1-"
-
-GetBootFS() {
-    bootfs=$(zpool get bootfs -o value -pH)
-}
-
-GetSnapshotName() {
-    local time=$(date +%s)
-    snapshotName="$snapshotName$time"
-}
-
-CreateSnapshot() {
-    echo "$bootfs@$snapshotName"
-    if [ "$bootfs" == "none" ]
-    then
-        echo "Could not get BOOTFS/Root dataset! Stopping..."
-        exit 1
-    fi
-    if [ "$snapshotName" == "zfs-snap-pac-1-" ]
-    then
-        echo "Could not generate a valid snapshot name! Stopping..."
-        exit 1
-    fi
+snapshotName="os-update-"
 
 
-    $(zfs snapshot $bootfs@$snapshotName)
-    echo "Done!"
-}
+##############################
+#   Main Script Part
+##############################
+#
+# get rootfs from zpool parameter bootfs
+bootfs=$(zpool get bootfs -o value -pH)
 
-GetBootFS
-GetSnapshotName
-CreateSnapshot
+if [ "$bootfs" == "none" ]
+then
+    echo "Could not get BOOTFS/Root dataset! Stopping..."
+    exit 1
+fi
+
+#
+# get how many snapshots we already have
+snapshotcount=$(zfs list -t snapshot -o name -pH $( echo -e "$bootfs" | wc -l))
+
+if [ "$snapshotcount" == 0 ]; then
+    echo "No snapshots found yet. Creating first snapshot..."
+
+    #
+    # TODO: 
+    # - create snapshot
+    # - add refind extra menu for snapshots
+    # - add first snapshot to refind
+    #
+else
+    echo "Found $snapshotcound existing snapshots."
+    #
+    # TODO:
+    # - inrement snapshotcound
+    # - create snapshot
+    # - add snapshot to refind
+fi
