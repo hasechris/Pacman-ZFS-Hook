@@ -12,7 +12,7 @@ checkdepends=()
 provides=("${pkgname}")
 conflicts=("${pkgname}")
 source=("$pkgname-$pkgver.tar.gz::https://github.com/hasechris/pacman-zfs-updatesnap-hook/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=("b4add69d00375cc97e542fbcaa8ab69ee4d475e0a9b50a95eefb1bef896d73a9")
+sha256sums=("f2ddffcf98c950c4d6f9b8a77c5c04ca20a23cc04d5f309d141eb45a2f1d54c9")
 
 package() {
     cd "$pkgname-$pkgver"
