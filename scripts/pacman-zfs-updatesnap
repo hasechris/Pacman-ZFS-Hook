@@ -64,12 +64,13 @@ readonly ZFS_MAXSNAPSHOTS=$(get_property "maxSnapshots" "integer" "3")
 
 #
 # build the snapshot name
-readonly SNAPSHOT_DESCRIPTION="$(get_property "snapshotDescription" "string" "pacman-zfs-updatesnap")_$(date +'%Y-%m-%d_%H-%M-%S')"
+readonly SNAPSHOT_DESCRIPTION="$(get_property "snapshotDescription" "string" "pacman-zfs-updatesnap" | tr -d '"')_$(date +'%Y-%m-%d_%H-%M-%S')"
 
 #
 # build the config variables
 readonly REFIND_SNAPSHOT_CONFIG_FILENAME="snapshot_$SNAPSHOT_DESCRIPTION.conf"
 readonly REFIND_SNAPSHOT_INCLUDE_LINE="include $REFIND_SNAPSHOT_CONFIG_FILENAME"
+readonly REFIND_GLOBAL_CONFIG="$(get_property "refindConfigFile" "string" "/boot/efi/EFI/refind/refind.conf" | tr -d '"')"
 readonly REFIND_SNAPSHOT_CONFIG_TEMPLATE=$(cat <<-END
 
 menuentry "Manjaro - $SNAPSHOT_DESCRIPTION" {
@@ -126,6 +127,16 @@ cp /boot/efi/EFI/Linux/linux.efi $SNAPSHOT_TARGET_FOLDER
 cp /boot/efi/EFI/Linux/linux-fallback.efi $SNAPSHOT_TARGET_FOLDER
 cp /boot/efi/EFI/Linux/linux-rescue.efi $SNAPSHOT_TARGET_FOLDER
 cp /boot/efi/EFI/Linux/linux-emergency.efi $SNAPSHOT_TARGET_FOLDER
+
+#
+# create and insert refind config file
+echo -e "$REFIND_SNAPSHOT_CONFIG_TEMPLATE" > $REFIND_SNAPSHOT_CONFIG_FILENAME
+echo -e "\n$REFIND_SNAPSHOT_INCLUDE_LINE" >> $REFIND_GLOBAL_CONFIG
+
+
+
+
+
 
 #
 # handle snapshot count if parameter in config is set
