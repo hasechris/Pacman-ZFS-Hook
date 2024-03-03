@@ -1,6 +1,6 @@
 # Maintainer: Christian Hase 
 pkgname=pacman-zfs-updatesnap-hook
-pkgver=0.1
+pkgver=0.2
 pkgrel=1
 pkgdesc="Pacman Hook to create ZFS Snapshots on Pacman Updating."
 arch=('x86_64')

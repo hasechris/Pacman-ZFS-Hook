@@ -1,19 +1,19 @@
 all:
-	echo 'Run "make install" to install Pacman-ZFS-Hook'
+	echo 'Run "make install" to install pacman-zfs-updatesnap-hook'
 
 install:
 	mkdir -p $(DESTDIR)/usr/share/libalpm/{hooks,scripts}
-	mkdir -p $(DESTDIR)/usr/share/{doc/pacman-zfs-hook,licenses/pacman-zfs-hook}
-	cp scripts/zfs-snap-pac $(DESTDIR)/usr/share/libalpm/scripts
-	cp hooks/01-zfs-snap-pac.hook $(DESTDIR)/usr/share/libalpm/hooks
-	chmod 755 $(DESTDIR)/usr/share/libalpm/scripts/zfs-snap-pac
-	cp LICENSE $(DESTDIR)/usr/share/licenses/pacman-zfs-hook
-	cp README.md $(DESTDIR)/usr/share/doc/pacman-zfs-hook
+	mkdir -p $(DESTDIR)/usr/share/{doc/pacman-zfs-updatesnap-hook,licenses/pacman-zfs-updatesnap-hook}
+	cp scripts/pacman-zfs-updatesnap $(DESTDIR)/usr/share/libalpm/scripts
+	cp hooks/01-pacman-zfs-updatesnap.hook $(DESTDIR)/usr/share/libalpm/hooks
+	chmod 755 $(DESTDIR)/usr/share/libalpm/scripts/pacman-zfs-updatesnap
+	cp LICENSE $(DESTDIR)/usr/share/licenses/pacman-zfs-updatesnap-hook
+	cp README.md $(DESTDIR)/usr/share/doc/pacman-zfs-updatesnap-hook
 
 uninstall:
-	rm -rf $(DESTDIR)/usr/share/doc/pacman-zfs-hook
-	rm -rf $(DESTDIR)/usr/share/licenses/pacman-zfs-hook
-	rm -f $(DESTDIR)/usr/share/libalpm/hooks/01-zfs-snap-pac.hook
-	rm -f $(DESTDIR)/usr/share/libalpm/scripts/zfs-snap-pac
+	rm -rf $(DESTDIR)/usr/share/doc/pacman-zfs-updatesnap-hook
+	rm -rf $(DESTDIR)/usr/share/licenses/pacman-zfs-updatesnap-hook
+	rm -f $(DESTDIR)/usr/share/libalpm/hooks/01-pacman-zfs-updatesnap.hook
+	rm -f $(DESTDIR)/usr/share/libalpm/scripts/pacman-zfs-updatesnap
 
 .PHONY: install uninstall all
