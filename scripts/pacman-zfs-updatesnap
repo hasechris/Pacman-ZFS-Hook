@@ -5,13 +5,14 @@
 # inspired by timeshift-autosnap
 
 set -e
-#set -x
 ##############################
 #   Variables
 ##############################
 ZFS_BOOTFS="none"
-readonly CONF_FILE="/etc/pacman-zfs-updatesnap.conf"
+#readonly CONF_FILE="/etc/pacman-zfs-updatesnap.conf"
+readonly CONF_FILE="/home/nemu/Projects/Pacman-ZFS-Hook/pacman-zfs-updatesnap.conf"
 readonly SNAPSHOTS_TO_DELETE=$(mktemp -u --tmpdir ${0##*/}.XXXXXXXX)
+readonly LIST_MKINITCPIO_PRESET_KERNELS=$(cat /etc/mkinitcpio.d/linux.preset | grep 'PRESETS=' | cut -d '=' -f2 | tr -d '(' | tr -d ')' | tr -d "'")
 
 ##############################
 # Functions
@@ -71,23 +72,8 @@ readonly SNAPSHOT_DESCRIPTION="$(get_property "snapshotDescription" "string" "pa
 readonly REFIND_SNAPSHOT_CONFIG_FILENAME="snapshot_$SNAPSHOT_DESCRIPTION.conf"
 readonly REFIND_SNAPSHOT_INCLUDE_LINE="include $REFIND_SNAPSHOT_CONFIG_FILENAME"
 readonly REFIND_GLOBAL_CONFIG="$(get_property "refindConfigFile" "string" "/boot/efi/EFI/refind/refind.conf" | tr -d '"')"
-readonly REFIND_SNAPSHOT_CONFIG_TEMPLATE=$(cat <<-END
 
-menuentry "Manjaro - $SNAPSHOT_DESCRIPTION" {
-    icon     /EFI/refind/refind-theme-maia/icons/384-144/os_manjaro.png
-    loader   /EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION/linux.efi
-    submenuentry "Fallback" {
-        loader /EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION/linux-fallback.efi
-    }
-    submenuentry "Rescue" {
-        loader   /EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION/linux-rescue.efi
-    }
-    submenuentry "Emergency" {
-        loader   /EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION/linux-emergency.efi
-    }
-}
-END
-)
+
 
 
 ##############################
@@ -112,29 +98,125 @@ fi
 echo "==> Creating snapshot $ZFS_BOOTFS@$SNAPSHOT_DESCRIPTION"
 ZFS_SNAPSHOT_RESULT=$(/usr/bin/zfs snapshot ${ZFS_BOOTFS}@${SNAPSHOT_DESCRIPTION})
 
-if [ $? == 1 ]; then
+if [ $? != 0 ]; then
     echo "ERROR: Create Snapshot failed. CMD Output:\n$ZFS_SNAPSHOT_RESULT"
+    exit 1
 fi
 
-# create target folder
-readonly SNAPSHOT_TARGET_FOLDER="/boot/efi/EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION/"
-mkdir -p $SNAPSHOT_TARGET_FOLDER
+#
+# start with empty list of submenuentries
+list_submenuentries=""
 
 #
-# copy kernels to snapshot folder
-cp /boot/efi/EFI/Linux/linux.efi $SNAPSHOT_TARGET_FOLDER
-cp /boot/efi/EFI/Linux/linux-fallback.efi $SNAPSHOT_TARGET_FOLDER
-cp /boot/efi/EFI/Linux/linux-rescue.efi $SNAPSHOT_TARGET_FOLDER
-cp /boot/efi/EFI/Linux/linux-emergency.efi $SNAPSHOT_TARGET_FOLDER
+# manage UKI Kernel Files if parameter is set to true
+if $(get_property "manageUKIKernels" "boolean" "false") ; then
+    #
+    # create target folder
+    readonly SNAPSHOT_TARGET_FOLDER="/boot/efi/EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION"
+    mkdir -p $SNAPSHOT_TARGET_FOLDER
 
-#
-# create and insert refind config file
-echo -e "$REFIND_SNAPSHOT_CONFIG_TEMPLATE" > /boot/efi/EFI/refind/$REFIND_SNAPSHOT_CONFIG_FILENAME
-echo -e "$REFIND_SNAPSHOT_INCLUDE_LINE" >> $REFIND_GLOBAL_CONFIG
+    for kernel in $LIST_MKINITCPIO_PRESET_KERNELS
+    do
+        #
+        # set name of kernel file
+        if [[ "$kernel" == "default" ]]; then
+            kernel="linux"
+        else
+            kernel="linux-$kernel"
+        fi
+
+        #
+        # IF additional kernel - set submenuentry and add to submenu list
+        if [[ "$kernel" != "linux" ]]; then
+            #
+            # set the submenu entry variable
+            REFIND_SNAPSHOT_CONFIG_TEMPLATE_INNER=$(cat <<-END
+    submenuentry "$kernel" {
+        loader   /EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION/$kernel.efi
+    }
+
+END
+)
+
+            #
+            # add submenu entry variable to list
+            list_submenuentries="$list_submenuentries\n$REFIND_SNAPSHOT_CONFIG_TEMPLATE_INNER"
+
+        fi
+        
 
 
+        #
+        # copy kernels to snapshot folder
+        cp /boot/efi/EFI/Linux/$kernel.efi $SNAPSHOT_TARGET_FOLDER/
+
+        #
+        # If we should resign kernel remove the signature now
+        if $(get_property "ReSignUKIKernels" "boolean" "false") ; then
+            #
+            # remove secure boot signature
+            sbattach --remove $SNAPSHOT_TARGET_FOLDER/$kernel.efi
+
+            #
+            # get state of kernel signature
+            verifyresult=$(sbverify --list $SNAPSHOT_TARGET_FOLDER/$kernel.efi 2>&1)
+            
+            #
+            # check state of kernel signature
+            if [[ "$verifyresult" != "No signature table present" ]]; then
+                echo "ERROR: Could not remove signature." >2
+            fi
+        fi            
+
+        #
+        # dump cmdline from kernel file
+        TEMP_FILE_CMDLINE_DUMP=$(mktemp -u --tmpdir ${0##*/}.XXXXXXXX)
+        objcopy --dump-section .cmdline=$TEMP_FILE_CMDLINE_DUMP $SNAPSHOT_TARGET_FOLDER/$kernel.efi
+
+        #
+        # change cmdline file
+        sed -i 's/root=ZFS='$(echo $ZFS_BOOTFS | sed 's/\//\\\//g')'/root=ZFS='$(echo $ZFS_BOOTFS | sed 's/\//\\\//g')'@'"$SNAPSHOT_DESCRIPTION"'/g' $TEMP_FILE_CMDLINE_DUMP
+
+        #
+        # remove cmdline from kernel
+        objcopy --remove-section .cmdline $SNAPSHOT_TARGET_FOLDER/$kernel.efi
+
+        #
+        # add new cmdline from temp file
+        objcopy --add-section .cmdline=$TEMP_FILE_CMDLINE_DUMP $SNAPSHOT_TARGET_FOLDER/$kernel.efi
+
+        if $(get_property "ReSignUKIKernels" "boolean" "false") ; then
+            #
+            # re-Sign the kernel file with the secureboot certificate
+            sbctl sign $SNAPSHOT_TARGET_FOLDER/$kernel.efi
+        fi
+
+        #
+        # remove temp cmdline file
+        rm $TEMP_FILE_CMDLINE_DUMP
+        
+    done
+
+    #
+    #
+    REFIND_SNAPSHOT_CONFIG_TEMPLATE_OUTER=$(cat <<-END
+menuentry "Manjaro Snapshot - $SNAPSHOT_DESCRIPTION" {
+    icon     /EFI/refind/refind-theme-maia/icons/384-144/os_manjaro.png
+    loader   /EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION/linux.efi
+    $list_submenuentries
+}
+END
+)
+    
+    #
+    # create and insert refind config file
+    echo -e "$REFIND_SNAPSHOT_CONFIG_TEMPLATE_OUTER" > /boot/efi/EFI/refind/$REFIND_SNAPSHOT_CONFIG_FILENAME
+    echo -e "$REFIND_SNAPSHOT_INCLUDE_LINE" >> $REFIND_GLOBAL_CONFIG
+
+fi
 
 
+exit 0
 
 
 #
