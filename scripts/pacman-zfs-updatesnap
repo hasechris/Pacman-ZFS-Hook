@@ -1,8 +1,10 @@
 #!/bin/bash
-# zfs-snap-pac
+# pacman-zfs-updatesnap
 #
 # modified by hasechris
 # inspired by timeshift-autosnap
+
+
 
 set -e
 ##############################
@@ -12,13 +14,20 @@ ZFS_BOOTFS="none"
 #readonly CONF_FILE="/etc/pacman-zfs-updatesnap.conf"
 readonly CONF_FILE="/home/nemu/Projects/Pacman-ZFS-Hook/pacman-zfs-updatesnap.conf"
 readonly SNAPSHOTS_TO_DELETE=$(mktemp -u --tmpdir ${0##*/}.XXXXXXXX)
-readonly LIST_MKINITCPIO_PRESET_KERNELS=$(cat /etc/mkinitcpio.d/linux.preset | grep 'PRESETS=' | cut -d '=' -f2 | tr -d '(' | tr -d ')' | tr -d "'")
+readonly OS_DISTRO=$(cat /etc/os-release | grep "^ID=" | cut -d '=' -f 2)
+
+if [[ "$OS_DISTRO" == "manjaro" ]]; then
+    readonly LIST_INSTALLED_KERNELS=$(pacman -Qs linux | grep -e "local/linux[0-9][0-9][[:space:]]" | awk '{print $1}' | sed 's/local\///g')
+elif [[ "$OS_DISTRO" == "arch" ]]; then
+    readonly LIST_INSTALLED_KERNELS=$(pacman -Qs linux | grep -e "local/linux[[:space:]]" | awk '{print $1}' | sed 's/local\///g')
+fi
+
 
 ##############################
 # Functions
 ##############################
-
 get_property() {
+    set +x
     if [ ! -f $CONF_FILE ]; then
         echo "$CONF_FILE not found! Using $1=$3" >&2;
         param_value=$3
@@ -35,6 +44,7 @@ get_property() {
     fi
 
     echo $param_value
+    set -x
 }
 
 
@@ -110,24 +120,37 @@ list_submenuentries=""
 #
 # manage UKI Kernel Files if parameter is set to true
 if $(get_property "manageUKIKernels" "boolean" "false") ; then
+    #set -x
+
     #
     # create target folder
     readonly SNAPSHOT_TARGET_FOLDER="/boot/efi/EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION"
     mkdir -p $SNAPSHOT_TARGET_FOLDER
 
-    for kernel in $LIST_MKINITCPIO_PRESET_KERNELS
+
+    #
+    # iterate over installed kernels
+    for presetfile in $LIST_INSTALLED_KERNELS
     do
-        #
-        # set name of kernel file
-        if [[ "$kernel" == "default" ]]; then
-            kernel="linux"
-        else
-            kernel="linux-$kernel"
-        fi
 
         #
-        # IF additional kernel - set submenuentry and add to submenu list
-        if [[ "$kernel" != "linux" ]]; then
+        # get mkinitcpio presets for kernel version
+        LIST_MKINITCPIO_PRESET_KERNEL=$(cat /etc/mkinitcpio.d/${presetfile}.preset | grep 'PRESETS=' | cut -d '=' -f2 | tr -d '(' | tr -d ')' | tr -d "'")
+
+        #
+        # get path of kernel file
+        PATH_KERNEL_FILE=$(cat /etc/mkinitcpio.d/${presetfile}.preset | grep "ALL_kver=" | cut -d '=' -f 2 | tr -d '"')
+
+        for preset in $LIST_MKINITCPIO_PRESET_KERNEL
+        do
+            #
+            # set name of kernel file
+            if [[ "$preset" == "default" ]]; then
+                kernel="$presetfile"
+            else
+                kernel="$presetfile-$preset"
+            fi
+
             #
             # set the submenu entry variable
             REFIND_SNAPSHOT_CONFIG_TEMPLATE_INNER=$(cat <<-END
@@ -142,81 +165,86 @@ END
             # add submenu entry variable to list
             list_submenuentries="$list_submenuentries\n$REFIND_SNAPSHOT_CONFIG_TEMPLATE_INNER"
 
-        fi
-        
-
-
-        #
-        # copy kernels to snapshot folder
-        cp /boot/efi/EFI/Linux/$kernel.efi $SNAPSHOT_TARGET_FOLDER/
-
-        #
-        # If we should resign kernel remove the signature now
-        if $(get_property "ReSignUKIKernels" "boolean" "false") ; then
             #
-            # remove secure boot signature
-            sbattach --remove $SNAPSHOT_TARGET_FOLDER/$kernel.efi
+            # determine which cmdline files to use
+            case $preset in
+            "default")
+                cmdline_files=$(get_property "default_cmdline_files" "string" "" | tr -d '"')
+                ;;
+            "fallback")
+                cmdline_files=$(get_property "fallback_cmdline_files" "string" "" | tr -d '"')
+                ;;
+            "rescue")
+                cmdline_files=$(get_property "rescue_cmdline_files" "string" "" | tr -d '"')
+                ;;
+            "emergency")
+                cmdline_files=$(get_property "emergency_cmdline_files" "string" "" | tr -d '"')
+                ;;
+            esac
+
+            if [[ -z "$cmdline_files" ]]; then
+                echo "ERROR: Please specify the cmdline files in $CONF_FILE" >2
+                exit 1
+            fi
 
             #
-            # get state of kernel signature
-            verifyresult=$(sbverify --list $SNAPSHOT_TARGET_FOLDER/$kernel.efi 2>&1)
+            # build cmdline for snapshot
+            for file in  ${cmdline_files//,/ }
+            do
+                # if zfs cmdline file -> change for snapshot
+                if [[ "$file" == "zfs" ]]; then
+                    cmdline="$cmdline $(cat /etc/cmdline.d/$file.conf | grep -v '#' | sed 's/root=ZFS='$(echo $ZFS_BOOTFS | sed 's/\//\\\//g')'/root=ZFS='$(echo $ZFS_BOOTFS | sed 's/\//\\\//g')'@'"$SNAPSHOT_DESCRIPTION"'/g')"
+                else 
+                    cmdline="$cmdline $(cat /etc/cmdline.d/$file.conf | grep -v '#')"
+                fi
+            done
             
             #
-            # check state of kernel signature
-            if [[ "$verifyresult" != "No signature table present" ]]; then
-                echo "ERROR: Could not remove signature." >2
-            fi
-        fi            
+            # get path of initrd file
+            PATH_INITRD_FILE=$(cat /etc/mkinitcpio.d/${presetfile}.preset | grep "${preset}_image=" | cut -d '=' -f 2 | tr -d '"')
 
-        #
-        # dump cmdline from kernel file
-        TEMP_FILE_CMDLINE_DUMP=$(mktemp -u --tmpdir ${0##*/}.XXXXXXXX)
-        objcopy --dump-section .cmdline=$TEMP_FILE_CMDLINE_DUMP $SNAPSHOT_TARGET_FOLDER/$kernel.efi
-
-        #
-        # change cmdline file
-        sed -i 's/root=ZFS='$(echo $ZFS_BOOTFS | sed 's/\//\\\//g')'/root=ZFS='$(echo $ZFS_BOOTFS | sed 's/\//\\\//g')'@'"$SNAPSHOT_DESCRIPTION"'/g' $TEMP_FILE_CMDLINE_DUMP
-
-        #
-        # remove cmdline from kernel
-        objcopy --remove-section .cmdline $SNAPSHOT_TARGET_FOLDER/$kernel.efi
-
-        #
-        # add new cmdline from temp file
-        objcopy --add-section .cmdline=$TEMP_FILE_CMDLINE_DUMP $SNAPSHOT_TARGET_FOLDER/$kernel.efi
-
-        if $(get_property "ReSignUKIKernels" "boolean" "false") ; then
+            ukify build \
+                --output $SNAPSHOT_TARGET_FOLDER/$kernel.efi \
+                --uname $(uname -r) \
+                --os-release "@/etc/os-release" \
+                --cmdline "$cmdline" \
+                --linux $PATH_KERNEL_FILE \
+                $(
+                  if pacman -Q intel-ucode > /dev/null 2>&1; then
+                      echo "--initrd /boot/intel-ucode.img"
+                  fi
+                  if pacman -Q amd-ucode > /dev/null 2>&1; then
+                      echo "--initrd /boot/amd-ucode.img"
+                  fi
+                ) \
+                --initrd "$PATH_INITRD_FILE"
+            
             #
-            # re-Sign the kernel file with the secureboot certificate
-            sbctl sign $SNAPSHOT_TARGET_FOLDER/$kernel.efi
-        fi
-
-        #
-        # remove temp cmdline file
-        rm $TEMP_FILE_CMDLINE_DUMP
-        
+            # If we should resign kernel
+            if $(get_property "ReSignUKIKernels" "boolean" "false") ; then
+                #
+                # sign new uki file
+                sbctl sign $SNAPSHOT_TARGET_FOLDER/$kernel.efi
+            fi
+            
+        done
     done
-
-    #
-    #
-    REFIND_SNAPSHOT_CONFIG_TEMPLATE_OUTER=$(cat <<-END
+        #
+        #
+        REFIND_SNAPSHOT_CONFIG_TEMPLATE_OUTER=$(cat <<-END
 menuentry "Manjaro Snapshot - $SNAPSHOT_DESCRIPTION" {
     icon     /EFI/refind/refind-theme-maia/icons/384-144/os_manjaro.png
-    loader   /EFI/Linux/snapshots/$SNAPSHOT_DESCRIPTION/linux.efi
     $list_submenuentries
 }
 END
 )
-    
-    #
-    # create and insert refind config file
-    echo -e "$REFIND_SNAPSHOT_CONFIG_TEMPLATE_OUTER" > /boot/efi/EFI/refind/$REFIND_SNAPSHOT_CONFIG_FILENAME
-    echo -e "$REFIND_SNAPSHOT_INCLUDE_LINE" >> $REFIND_GLOBAL_CONFIG
-
+    if $(get_property "updateRefind" "boolean" "false") ; then
+        #
+        # create and insert refind config file
+        echo -e "$REFIND_SNAPSHOT_CONFIG_TEMPLATE_OUTER" > /boot/efi/EFI/refind/$REFIND_SNAPSHOT_CONFIG_FILENAME
+        echo -e "$REFIND_SNAPSHOT_INCLUDE_LINE" >> $REFIND_GLOBAL_CONFIG
+    fi
 fi
-
-
-exit 0
 
 
 #
@@ -224,19 +252,55 @@ exit 0
 if $(get_property "deleteSnapshots" "boolean" "false") ; then
     echo "==> deleteSnapshots enabled. Getting Snapshot list..."
     # get list of snapshots
-    zfs list -t snapshot -o name -pH $ZFS_BOOTFS > $SNAPSHOTS_TO_DELETE
+    snapshots=$(zfs list -t snapshot -o name -pH $ZFS_BOOTFS)
+    snapshot_count=$(echo "$snapshots" | wc -l)
 
     echo "Config - maxSnapshots: $ZFS_MAXSNAPSHOTS"
-    count_to_delete=$(($(echo $SNAPSHOTS_TO_DELETE|wc -l) - $ZFS_MAXSNAPSHOTS))
+    count_to_delete=$(($snapshot_count - $ZFS_MAXSNAPSHOTS))
+    
+    if [ $count_to_delete -gt 0 ] ; then
+        echo "Have to delete $count_to_delete snapshots"
+        #
+        # aka remove last x lines of file
+        filtered_snapshots=$(echo "$snapshots" | head -n -"$ZFS_MAXSNAPSHOTS")
+        # | sed '1,'"$ZFS_MAXSNAPSHOTS"' d'  )
 
-    if [ "$count_to_delete" -gt 0 ] ; then
-        sed -i $(($count_to_delete))q $SNAPSHOTS_TO_DELETE
-        
-        for snapshot in $(cat $SNAPSHOTS_TO_DELETE); do
-            echo "==> Deleting Snapshot: $snapshot"
+
+        for snapshot in $filtered_snapshots
+        do
+            echo "==> Deleting ZFS Snapshot: $snapshot"
+
+            #
+            # delete ZFS Snap
+            zfs destroy $snapshot
+
+            #
+            #
+            if $(get_property "manageUKIKernels" "boolean" "false") ; then
+                #
+                #
+                snapshot_name=$(echo "$snapshot" | sed -e 's/'$(echo "$ZFS_BOOTFS" | sed 's/\//\\\//g')'\@//g' )
+
+                #
+                # delete folder for 
+                rm -r /boot/efi/EFI/Linux/snapshots/$snapshot_name
+
+                if $(get_property "updateRefind" "boolean" "false") ; then
+                    #
+                    # remove rEFInd config for snapshot
+                    rm /boot/efi/EFI/refind/snapshot_${snapshot_name}.conf
+
+                    #
+                    # remove include from global refind_config
+                    sed -i '/include snapshot_'"$snapshot_name"'/d' $REFIND_GLOBAL_CONFIG
+                fi
+            fi
         done
+    else
+        echo "No Snapshots found to delete."
     fi
-fi;
+fi
+
 
 
 set +x
